@@ -21,9 +21,10 @@ frontend/.env
 *.env
 *.env.*
 
-# Allow .env.example files for reference
-!backend/.env.example
-!frontend/.env.example
+# .env.example files are also ignored to protect all config references
+# Uncomment the lines below ONLY if you want to share example configs:
+# !backend/.env.example
+# !frontend/.env.example
 
 # OCR training data
 *.traineddata
