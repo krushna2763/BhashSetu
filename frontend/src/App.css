@@ -1,0 +1,22 @@
+.App {
+  min-height: 100vh;
+  background-color: #fdf8f0;
+}
+
+input[type="file"]::-webkit-file-upload-button {
+  cursor: pointer;
+}
+
+@keyframes bhasha-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.55;
+  }
+}
+
+.bhasha-pulse {
+  animation: bhasha-pulse 1.4s ease-in-out infinite;
+}

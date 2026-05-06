@@ -1,0 +1,72 @@
+@tailwind base;
+@tailwind components;
+@tailwind utilities;
+
+html,
+body,
+#root {
+  background-color: #fdf8f0;
+  color: #111827;
+}
+
+body {
+  margin: 0;
+  font-family:
+    "Mukta", "Noto Sans Devanagari", -apple-system, BlinkMacSystemFont,
+    "Segoe UI", "Roboto", sans-serif;
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  font-size: 18px;
+  line-height: 1.55;
+}
+
+.font-brand {
+  font-family: "Rozha One", "Mukta", serif;
+  letter-spacing: 0.5px;
+}
+
+.bhasha-mandala-bg {
+  background-image: url("https://static.prod-images.emergentagent.com/jobs/d492429b-d96a-4ed0-9478-e7008f441fcf/images/e02456cc1c2ba550cb9cfdb72f883db8d3f3c440f3d1c0bb48664b06ce2a5152.png");
+  background-repeat: repeat;
+  background-size: 220px;
+  opacity: 0.1;
+}
+
+@layer base {
+  :root {
+    --background: 36 70% 97%;
+    --foreground: 222 14% 14%;
+    --card: 0 0% 100%;
+    --card-foreground: 222 14% 14%;
+    --popover: 0 0% 100%;
+    --popover-foreground: 222 14% 14%;
+    --primary: 215 61% 26%;
+    --primary-foreground: 0 0% 100%;
+    --secondary: 36 60% 95%;
+    --secondary-foreground: 215 61% 26%;
+    --muted: 36 40% 92%;
+    --muted-foreground: 215 14% 35%;
+    --accent: 37 91% 55%;
+    --accent-foreground: 215 61% 26%;
+    --destructive: 0 84% 55%;
+    --destructive-foreground: 0 0% 100%;
+    --border: 36 30% 88%;
+    --input: 36 30% 88%;
+    --ring: 215 61% 26%;
+    --radius: 0.75rem;
+  }
+}
+
+@layer base {
+  * {
+    @apply border-border;
+  }
+
+  body {
+    @apply text-foreground;
+  }
+}
+
+[data-sonner-toaster] [data-sonner-toast] {
+  font-size: 17px !important;
+}
