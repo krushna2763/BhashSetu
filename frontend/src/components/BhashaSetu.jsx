@@ -58,6 +58,8 @@ export default function BhashaSetu() {
   const [history, setHistory] = useState([]);
   const fileInputRef = useRef(null);
   const utteranceRef = useRef(null);
+  const voicesCacheRef = useRef(null);
+  const voicesLoadTimeRef = useRef(null);
 
   const speechSupported =
     typeof window !== "undefined" && "speechSynthesis" in window;
@@ -77,9 +79,26 @@ export default function BhashaSetu() {
 
   useEffect(() => {
     fetchHistory();
-    return () => {
-      if (speechSupported) window.speechSynthesis.cancel();
-    };
+    
+    // Initialize voice system
+    if (speechSupported) {
+      // Load voices immediately
+      preloadVoices();
+      
+      // Set up voice change listener
+      const handleVoicesChanged = () => {
+        voicesCacheRef.current = null; // Clear cache
+        voicesLoadTimeRef.current = null;
+        preloadVoices();
+      };
+      
+      window.speechSynthesis.addEventListener('voiceschanged', handleVoicesChanged);
+      
+      return () => {
+        window.speechSynthesis.removeEventListener('voiceschanged', handleVoicesChanged);
+        if (speechSupported) window.speechSynthesis.cancel();
+      };
+    }
   }, [speechSupported]);
 
   useEffect(() => {
@@ -182,26 +201,238 @@ export default function BhashaSetu() {
     }
   };
 
+  // Text cleaning function for better speech synthesis
+  const cleanTextForSpeech = (text, targetLang) => {
+    if (!text) return '';
+    
+    let cleanedText = text;
+    
+    // Remove HTML tags
+    cleanedText = cleanedText.replace(/<[^>]*>/g, '');
+    
+    // Remove only standalone numbering patterns that interfere with speech
+    cleanedText = cleanedText.replace(/^\d+\.\s*/gm, ''); // Remove "1. ", "2. " etc at line start
+    cleanedText = cleanedText.replace(/^\d+\s*$/gm, ''); // Remove lines that are just numbers
+    
+    // Remove extra whitespace and normalize
+    cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+    
+    // For Indic languages, be more selective about what to remove
+    if (['mr', 'hi', 'ta', 'te'].includes(targetLang)) {
+      // Only remove common English words that don't add meaning, not all English
+      const commonEnglishWords = /\b(the|and|or|but|in|on|at|to|for|of|with|by|is|are|was|were|be|been|have|has|had|do|does|did|will|would|could|should|may|might|must|can|this|that|these|those|a|an)\b/gi;
+      cleanedText = cleanedText.replace(commonEnglishWords, '');
+      
+      // Remove standalone numbers within text (but keep numbers that are part of words)
+      cleanedText = cleanedText.replace(/\s\d+\s/g, ' ');
+      
+      // Clean up extra spaces
+      cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
+    }
+    
+    // If text is empty after cleaning, return original
+    if (!cleanedText || cleanedText.length < 2) {
+      console.warn('Text cleaning removed too much, returning original:', text);
+      return text;
+    }
+    
+    return cleanedText;
+  };
+
+// Voice caching and preloading system
+  const getCachedVoices = () => {
+    const now = Date.now();
+    const CACHE_DURATION = 30000; // 30 seconds cache
+    
+    // If we have cached voices and they're recent, return them
+    if (voicesCacheRef.current && voicesLoadTimeRef.current && 
+        (now - voicesLoadTimeRef.current) < CACHE_DURATION) {
+      return voicesCacheRef.current;
+    }
+    
+    // Otherwise, get fresh voices and cache them
+    const voices = window.speechSynthesis.getVoices();
+    voicesCacheRef.current = voices;
+    voicesLoadTimeRef.current = now;
+    
+    if (process.env.NODE_ENV !== 'production') {
+      console.log('Voice cache refreshed with', voices.length, 'voices');
+    }
+    
+    return voices;
+  };
+  
+  // Preload voices on component mount and when voices change
+  const preloadVoices = () => {
+    if (!speechSupported) return;
+    
+    const voices = getCachedVoices();
+    
+    // Pre-warm the speech synthesis engine
+    if (voices.length > 0 && !utteranceRef.current) {
+      const warmupUtterance = new SpeechSynthesisUtterance('');
+      warmupUtterance.volume = 0;
+      window.speechSynthesis.speak(warmupUtterance);
+      window.speechSynthesis.cancel();
+      utteranceRef.current = warmupUtterance;
+    }
+  };
+
+  // Enhanced voice selection with quality scoring system
+  const selectBestVoice = (targetLang, voices) => {
+    // Voice quality scoring function
+    const scoreVoice = (voice, targetLang) => {
+      let score = 0;
+      
+      // Exact language match gets highest priority
+      if (voice.lang === targetLang) score += 100;
+      else if (voice.lang.startsWith(targetLang.split('-')[0])) score += 80;
+      else score += 20; // Still give points for other voices
+      
+      // High-quality voice providers get bonus points
+      if (voice.name.includes('Google')) score += 30;
+      else if (voice.name.includes('Microsoft')) score += 25;
+      else if (voice.name.includes('Amazon')) score += 20;
+      else if (voice.name.includes('Natural')) score += 15;
+      else if (voice.name.includes('Premium')) score += 10;
+      
+      // Local service voices are usually higher quality
+      if (voice.localService === true) score += 20;
+      
+      // Prefer voices with quality indicators
+      if (voice.name.includes('HD') || voice.name.includes('High') || voice.name.includes('Enhanced')) score += 15;
+      
+      return score;
+    };
+    
+    // Score all voices and find the best one
+    let bestVoice = null;
+    let bestScore = -1;
+    
+    voices.forEach(voice => {
+      const score = scoreVoice(voice, targetLang);
+      if (score > bestScore) {
+        bestScore = score;
+        bestVoice = voice;
+      }
+    });
+    
+    return bestVoice;
+  };
+  
+  // Language-specific fallback mappings
+  const getLanguageFallbacks = (lang) => {
+    const fallbacks = {
+      'mr-IN': ['hi-IN', 'hi', 'en-IN', 'en'],
+      'ta-IN': ['hi-IN', 'te-IN', 'en-IN', 'en'],
+      'te-IN': ['hi-IN', 'ta-IN', 'en-IN', 'en'],
+      'hi-IN': ['en-IN', 'en'],
+      'es-ES': ['en-US', 'en'],
+      'fr-FR': ['en-US', 'en'],
+      'de-DE': ['en-US', 'en'],
+      'it-IT': ['en-US', 'en'],
+      'pt-BR': ['en-US', 'en'],
+      'ru-RU': ['en-US', 'en'],
+      'ja-JP': ['en-US', 'en'],
+      'zh-CN': ['en-US', 'en'],
+      'ko-KR': ['en-US', 'en']
+    };
+    return fallbacks[lang] || ['en-US', 'en'];
+  };
+  
+  // Language-specific speech parameters
+  const getSpeechParameters = (lang) => {
+    const params = {
+      'mr-IN': { rate: 0.75, pitch: 0.95, volume: 0.85 },
+      'hi-IN': { rate: 0.8, pitch: 1.0, volume: 0.9 },
+      'ta-IN': { rate: 0.85, pitch: 1.05, volume: 0.9 },
+      'te-IN': { rate: 0.85, pitch: 1.0, volume: 0.9 },
+      'es-ES': { rate: 0.9, pitch: 1.0, volume: 0.95 },
+      'fr-FR': { rate: 0.95, pitch: 1.0, volume: 0.95 },
+      'de-DE': { rate: 0.9, pitch: 0.95, volume: 0.9 },
+      'it-IT': { rate: 0.9, pitch: 1.05, volume: 0.95 },
+      'pt-BR': { rate: 0.85, pitch: 1.0, volume: 0.9 },
+      'ru-RU': { rate: 0.8, pitch: 0.95, volume: 0.85 },
+      'ja-JP': { rate: 0.85, pitch: 1.1, volume: 0.9 },
+      'zh-CN': { rate: 0.8, pitch: 1.0, volume: 0.85 },
+      'ko-KR': { rate: 0.85, pitch: 1.05, volume: 0.9 }
+    };
+    return params[lang] || { rate: 0.8, pitch: 1.0, volume: 0.9 };
+  };
+
   const speak = (text) => {
     if (!speechSupported) {
       toast.error("Voice not available on this device.");
       return;
     }
     if (!text) return;
+    
+    // Cancel any ongoing speech
     window.speechSynthesis.cancel();
-    const lang = LANGUAGES.find((l) => l.code === targetLang)?.speech || "hi-IN";
-    const utt = new SpeechSynthesisUtterance(text);
+    
+    // Get the correct language code for speech synthesis
+    const selectedLanguage = LANGUAGES.find((l) => l.code === targetLang);
+    let lang = selectedLanguage?.speech || "hi-IN";
+    
+    // Clean text for better speech
+    const cleanedText = cleanTextForSpeech(text, targetLang);
+    
+    // Create utterance with cleaned text
+    const utt = new SpeechSynthesisUtterance(cleanedText);
+    
+    // Set language and basic parameters
     utt.lang = lang;
-    utt.rate = 0.95;
-    utt.pitch = 1;
+    utt.rate = 0.8;
+    utt.pitch = 1.0;
+    utt.volume = 0.9;
+    
+    // Event handlers
     utt.onstart = () => setIsSpeaking(true);
     utt.onend = () => setIsSpeaking(false);
     utt.onerror = () => {
       setIsSpeaking(false);
-      toast.error("Voice not available on this device.");
+      toast.error("Voice synthesis failed");
     };
+    
+    // Get all available voices
+    const voices = window.speechSynthesis.getVoices();
+    
+    // Simple voice selection - try to find voice for the language
+    let targetVoice = null;
+    
+    // Try exact match first
+    targetVoice = voices.find(voice => voice.lang === lang);
+    
+    // If no exact match, try language prefix
+    if (!targetVoice) {
+      targetVoice = voices.find(voice => voice.lang.startsWith(lang.split('-')[0]));
+    }
+    
+    // Special case: Marathi -> Hindi fallback
+    if (!targetVoice && lang === 'mr-IN') {
+      targetVoice = voices.find(voice => voice.lang === 'hi-IN');
+      if (targetVoice) {
+        utt.lang = 'hi-IN';
+      }
+    }
+    
+    // If still no voice, use first available
+    if (!targetVoice && voices.length > 0) {
+      targetVoice = voices[0];
+    }
+    
+    // Set the voice if found
+    if (targetVoice) {
+      utt.voice = targetVoice;
+    }
+    
+    // Speak the text
     utteranceRef.current = utt;
-    window.speechSynthesis.speak(utt);
+    
+    // Small delay to ensure everything is ready
+    setTimeout(() => {
+      window.speechSynthesis.speak(utt);
+    }, 100);
   };
 
   const stopSpeak = () => {
@@ -209,6 +440,7 @@ export default function BhashaSetu() {
     window.speechSynthesis.cancel();
     setIsSpeaking(false);
   };
+
 
   const onClear = () => {
     setFile(null);
@@ -532,7 +764,6 @@ export default function BhashaSetu() {
           )}
         </section>
       </main>
-
       <footer className="mt-10 border-t border-[#f5a623]/30 bg-white/60">
         <div className="mx-auto max-w-5xl px-6 py-6 text-center text-sm text-gray-600">
           भाषा सेतु · OCR + Translation · MERN
