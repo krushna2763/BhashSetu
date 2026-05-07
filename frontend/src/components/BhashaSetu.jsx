@@ -207,32 +207,27 @@ export default function BhashaSetu() {
     
     let cleanedText = text;
     
-    // Remove HTML tags
+    // Remove HTML tags only
     cleanedText = cleanedText.replace(/<[^>]*>/g, '');
     
-    // Remove only standalone numbering patterns that interfere with speech
-    cleanedText = cleanedText.replace(/^\d+\.\s*/gm, ''); // Remove "1. ", "2. " etc at line start
-    cleanedText = cleanedText.replace(/^\d+\s*$/gm, ''); // Remove lines that are just numbers
+    // Remove only obvious numbering at the start of lines
+    cleanedText = cleanedText.replace(/^\d+\.\s*/gm, '');
     
     // Remove extra whitespace and normalize
     cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
     
-    // For Indic languages, be more selective about what to remove
+    // For Indic languages, be very conservative - don't remove much
     if (['mr', 'hi', 'ta', 'te'].includes(targetLang)) {
-      // Only remove common English words that don't add meaning, not all English
-      const commonEnglishWords = /\b(the|and|or|but|in|on|at|to|for|of|with|by|is|are|was|were|be|been|have|has|had|do|does|did|will|would|could|should|may|might|must|can|this|that|these|those|a|an)\b/gi;
-      cleanedText = cleanedText.replace(commonEnglishWords, '');
+      // Only remove very basic English words that are clearly filler
+      const fillerWords = /\b(the|and|or|but)\b/gi;
+      cleanedText = cleanedText.replace(fillerWords, '');
       
-      // Remove standalone numbers within text (but keep numbers that are part of words)
-      cleanedText = cleanedText.replace(/\s\d+\s/g, ' ');
-      
-      // Clean up extra spaces
+      // Clean up extra spaces after removing filler words
       cleanedText = cleanedText.replace(/\s+/g, ' ').trim();
     }
     
     // If text is empty after cleaning, return original
     if (!cleanedText || cleanedText.length < 2) {
-      console.warn('Text cleaning removed too much, returning original:', text);
       return text;
     }
     
@@ -374,17 +369,15 @@ export default function BhashaSetu() {
     const selectedLanguage = LANGUAGES.find((l) => l.code === targetLang);
     let lang = selectedLanguage?.speech || "hi-IN";
     
-    // Clean text for better speech
-    const cleanedText = cleanTextForSpeech(text, targetLang);
+    // Create utterance with original text (no cleaning to preserve all content)
+    const utt = new SpeechSynthesisUtterance(text);
     
-    // Create utterance with cleaned text
-    const utt = new SpeechSynthesisUtterance(cleanedText);
-    
-    // Set language and basic parameters
+    // Force the language - this is critical
     utt.lang = lang;
+    
+    // Set basic parameters
     utt.rate = 0.8;
     utt.pitch = 1.0;
-    utt.volume = 0.9;
     
     // Event handlers
     utt.onstart = () => setIsSpeaking(true);
@@ -397,23 +390,34 @@ export default function BhashaSetu() {
     // Get all available voices
     const voices = window.speechSynthesis.getVoices();
     
-    // Simple voice selection - try to find voice for the language
+    // Simple and direct voice selection
     let targetVoice = null;
     
-    // Try exact match first
-    targetVoice = voices.find(voice => voice.lang === lang);
-    
-    // If no exact match, try language prefix
-    if (!targetVoice) {
-      targetVoice = voices.find(voice => voice.lang.startsWith(lang.split('-')[0]));
-    }
-    
-    // Special case: Marathi -> Hindi fallback
-    if (!targetVoice && lang === 'mr-IN') {
-      targetVoice = voices.find(voice => voice.lang === 'hi-IN');
-      if (targetVoice) {
-        utt.lang = 'hi-IN';
-      }
+    // For each language, try specific voices
+    if (targetLang === 'hi') {
+      // Hindi voices
+      targetVoice = voices.find(voice => voice.lang === 'hi-IN') ||
+                   voices.find(voice => voice.lang.startsWith('hi')) ||
+                   voices.find(voice => voice.lang.includes('IN'));
+    } else if (targetLang === 'mr') {
+      // Marathi voices
+      targetVoice = voices.find(voice => voice.lang === 'mr-IN') ||
+                   voices.find(voice => voice.lang.startsWith('mr')) ||
+                   voices.find(voice => voice.lang.includes('IN'));
+    } else if (targetLang === 'ta') {
+      // Tamil voices
+      targetVoice = voices.find(voice => voice.lang === 'ta-IN') ||
+                   voices.find(voice => voice.lang.startsWith('ta')) ||
+                   voices.find(voice => voice.lang.includes('IN'));
+    } else if (targetLang === 'te') {
+      // Telugu voices
+      targetVoice = voices.find(voice => voice.lang === 'te-IN') ||
+                   voices.find(voice => voice.lang.startsWith('te')) ||
+                   voices.find(voice => voice.lang.includes('IN'));
+    } else {
+      // Other languages
+      targetVoice = voices.find(voice => voice.lang === lang) ||
+                   voices.find(voice => voice.lang.startsWith(lang.split('-')[0]));
     }
     
     // If still no voice, use first available
@@ -421,7 +425,7 @@ export default function BhashaSetu() {
       targetVoice = voices[0];
     }
     
-    // Set the voice if found
+    // Set the voice
     if (targetVoice) {
       utt.voice = targetVoice;
     }
@@ -437,8 +441,15 @@ export default function BhashaSetu() {
 
   const stopSpeak = () => {
     if (!speechSupported) return;
+    
+    // Cancel any ongoing speech
     window.speechSynthesis.cancel();
+    
+    // Set speaking state to false
     setIsSpeaking(false);
+    
+    // Clear any reference
+    utteranceRef.current = null;
   };
 
 
