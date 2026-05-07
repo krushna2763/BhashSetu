@@ -58,6 +58,8 @@ export default function BhashaSetu() {
   const [history, setHistory] = useState([]);
   const fileInputRef = useRef(null);
   const utteranceRef = useRef(null);
+  const speechQueueRef = useRef([]);
+  const warmupDoneRef = useRef(false);
   const voicesCacheRef = useRef(null);
   const voicesLoadTimeRef = useRef(null);
 
@@ -264,12 +266,12 @@ export default function BhashaSetu() {
     const voices = getCachedVoices();
     
     // Pre-warm the speech synthesis engine
-    if (voices.length > 0 && !utteranceRef.current) {
+    if (voices.length > 0 && !warmupDoneRef.current) {
       const warmupUtterance = new SpeechSynthesisUtterance('');
       warmupUtterance.volume = 0;
       window.speechSynthesis.speak(warmupUtterance);
       window.speechSynthesis.cancel();
-      utteranceRef.current = warmupUtterance;
+      warmupDoneRef.current = true;
     }
   };
 
@@ -278,24 +280,33 @@ export default function BhashaSetu() {
     // Voice quality scoring function
     const scoreVoice = (voice, targetLang) => {
       let score = 0;
+      const baseLang = targetLang.split('-')[0];
+      const voiceName = voice.name.toLowerCase();
       
       // Exact language match gets highest priority
       if (voice.lang === targetLang) score += 100;
-      else if (voice.lang.startsWith(targetLang.split('-')[0])) score += 80;
-      else score += 20; // Still give points for other voices
+      else if (voice.lang.startsWith(baseLang)) score += 80;
+      else score -= 100;
       
       // High-quality voice providers get bonus points
-      if (voice.name.includes('Google')) score += 30;
-      else if (voice.name.includes('Microsoft')) score += 25;
-      else if (voice.name.includes('Amazon')) score += 20;
-      else if (voice.name.includes('Natural')) score += 15;
-      else if (voice.name.includes('Premium')) score += 10;
+      if (voiceName.includes('google')) score += 30;
+      else if (voiceName.includes('microsoft')) score += 25;
+      else if (voiceName.includes('amazon')) score += 20;
+      else if (voiceName.includes('natural')) score += 15;
+      else if (voiceName.includes('premium')) score += 10;
       
       // Local service voices are usually higher quality
       if (voice.localService === true) score += 20;
       
       // Prefer voices with quality indicators
-      if (voice.name.includes('HD') || voice.name.includes('High') || voice.name.includes('Enhanced')) score += 15;
+      if (voiceName.includes('hd') || voiceName.includes('high') || voiceName.includes('enhanced')) score += 15;
+
+      // Prefer region-correct Indian voices for Indic languages.
+      if (targetLang.endsWith('-IN') && voice.lang.endsWith('-IN')) score += 20;
+
+      // Avoid novelty or robotic-sounding variants when better options exist.
+      if (voiceName.includes('desktop')) score -= 5;
+      if (voice.default) score += 5;
       
       return score;
     };
@@ -313,6 +324,90 @@ export default function BhashaSetu() {
     });
     
     return bestVoice;
+  };
+
+  const buildSpeechSegments = (text) => {
+    const sentenceParts = text
+      .split(/(?<=[.!?।॥])\s+|(?<=,)\s+/)
+      .map((part) => part.trim())
+      .filter(Boolean);
+
+    if (sentenceParts.length === 0) {
+      return [];
+    }
+
+    const segments = [];
+    let currentSegment = "";
+
+    sentenceParts.forEach((part) => {
+      const nextSegment = currentSegment ? `${currentSegment} ${part}` : part;
+
+      if (nextSegment.length > 180 && currentSegment) {
+        segments.push(currentSegment);
+        currentSegment = part;
+      } else {
+        currentSegment = nextSegment;
+      }
+    });
+
+    if (currentSegment) {
+      segments.push(currentSegment);
+    }
+
+    return segments;
+  };
+
+  const resolveVoiceForLanguage = (lang, voices) => {
+    const candidates = [lang, ...getLanguageFallbacks(lang)];
+
+    for (const candidateLang of candidates) {
+      const matchingVoices = voices.filter(
+        (voice) =>
+          voice.lang === candidateLang ||
+          voice.lang.startsWith(candidateLang.split("-")[0]),
+      );
+
+      if (matchingVoices.length > 0) {
+        return selectBestVoice(candidateLang, matchingVoices);
+      }
+    }
+
+    return selectBestVoice(lang, voices);
+  };
+
+  const speakNextSegment = (voice, lang, params) => {
+    const nextSegment = speechQueueRef.current.shift();
+
+    if (!nextSegment) {
+      utteranceRef.current = null;
+      setIsSpeaking(false);
+      return;
+    }
+
+    const utt = new SpeechSynthesisUtterance(nextSegment);
+    utt.lang = lang;
+    utt.rate = params.rate;
+    utt.pitch = params.pitch;
+    utt.volume = params.volume;
+
+    if (voice) {
+      utt.voice = voice;
+    }
+
+    utt.onstart = () => setIsSpeaking(true);
+    utt.onend = () => {
+      utteranceRef.current = null;
+      speakNextSegment(voice, lang, params);
+    };
+    utt.onerror = () => {
+      speechQueueRef.current = [];
+      utteranceRef.current = null;
+      setIsSpeaking(false);
+      toast.error("Voice synthesis failed");
+    };
+
+    utteranceRef.current = utt;
+    window.speechSynthesis.speak(utt);
   };
   
   // Language-specific fallback mappings
@@ -362,93 +457,36 @@ export default function BhashaSetu() {
     }
     if (!text) return;
     
-    // Cancel any ongoing speech
     window.speechSynthesis.cancel();
+    speechQueueRef.current = [];
     
-    // Get the correct language code for speech synthesis
     const selectedLanguage = LANGUAGES.find((l) => l.code === targetLang);
-    let lang = selectedLanguage?.speech || "hi-IN";
-    
-    // Create utterance with original text (no cleaning to preserve all content)
-    const utt = new SpeechSynthesisUtterance(text);
-    
-    // Force the language - this is critical
-    utt.lang = lang;
-    
-    // Set basic parameters
-    utt.rate = 0.8;
-    utt.pitch = 1.0;
-    
-    // Event handlers
-    utt.onstart = () => setIsSpeaking(true);
-    utt.onend = () => setIsSpeaking(false);
-    utt.onerror = () => {
-      setIsSpeaking(false);
-      toast.error("Voice synthesis failed");
-    };
-    
-    // Get all available voices
-    const voices = window.speechSynthesis.getVoices();
-    
-    // Simple and direct voice selection
-    let targetVoice = null;
-    
-    // For each language, try specific voices
-    if (targetLang === 'hi') {
-      // Hindi voices
-      targetVoice = voices.find(voice => voice.lang === 'hi-IN') ||
-                   voices.find(voice => voice.lang.startsWith('hi')) ||
-                   voices.find(voice => voice.lang.includes('IN'));
-    } else if (targetLang === 'mr') {
-      // Marathi voices
-      targetVoice = voices.find(voice => voice.lang === 'mr-IN') ||
-                   voices.find(voice => voice.lang.startsWith('mr')) ||
-                   voices.find(voice => voice.lang.includes('IN'));
-    } else if (targetLang === 'ta') {
-      // Tamil voices
-      targetVoice = voices.find(voice => voice.lang === 'ta-IN') ||
-                   voices.find(voice => voice.lang.startsWith('ta')) ||
-                   voices.find(voice => voice.lang.includes('IN'));
-    } else if (targetLang === 'te') {
-      // Telugu voices
-      targetVoice = voices.find(voice => voice.lang === 'te-IN') ||
-                   voices.find(voice => voice.lang.startsWith('te')) ||
-                   voices.find(voice => voice.lang.includes('IN'));
-    } else {
-      // Other languages
-      targetVoice = voices.find(voice => voice.lang === lang) ||
-                   voices.find(voice => voice.lang.startsWith(lang.split('-')[0]));
+    const lang = selectedLanguage?.speech || "hi-IN";
+    const cleanedText = cleanTextForSpeech(text, targetLang);
+    const speechSegments = buildSpeechSegments(cleanedText);
+
+    if (speechSegments.length === 0) {
+      toast.error("Nothing to read aloud.");
+      return;
     }
-    
-    // If still no voice, use first available
-    if (!targetVoice && voices.length > 0) {
-      targetVoice = voices[0];
-    }
-    
-    // Set the voice
-    if (targetVoice) {
-      utt.voice = targetVoice;
-    }
-    
-    // Speak the text
-    utteranceRef.current = utt;
-    
-    // Small delay to ensure everything is ready
+
+    const voices = getCachedVoices();
+    const targetVoice = resolveVoiceForLanguage(lang, voices);
+    const params = getSpeechParameters(lang);
+
+    speechQueueRef.current = [...speechSegments];
+
     setTimeout(() => {
-      window.speechSynthesis.speak(utt);
-    }, 100);
+      speakNextSegment(targetVoice, lang, params);
+    }, 80);
   };
 
   const stopSpeak = () => {
     if (!speechSupported) return;
     
-    // Cancel any ongoing speech
     window.speechSynthesis.cancel();
-    
-    // Set speaking state to false
+    speechQueueRef.current = [];
     setIsSpeaking(false);
-    
-    // Clear any reference
     utteranceRef.current = null;
   };
 
